@@ -83,9 +83,11 @@
 import SwiftUI
 
 struct MessageField: View {
+    let senderId: String
+    let receiverId: String
+    
     @StateObject private var recorder = AudioRecorder()
     @State private var isRecording = false
-
     @EnvironmentObject var messagesManager: MessaageManagaer
     @State private var message = ""
 
@@ -122,7 +124,7 @@ struct MessageField: View {
 
             // Send Message Button
             Button {
-                messagesManager.sentMessage(text: message)
+                messagesManager.sentMessage(text: message, senderId: senderId, receiverId: receiverId)
                 message = ""
             } label: {
                 Image(systemName: "paperplane.fill")
@@ -135,24 +137,3 @@ struct MessageField: View {
         .padding()
     }
 }
-struct CustomTextField: View {
-    let placeholder: String
-    @Binding var text: String
-
-    var body: some View {
-        ZStack(alignment: .leading) {
-
-            if text.isEmpty {
-                Text(placeholder)
-                    .foregroundColor(.gray)
-            }
-
-            TextField("", text: $text)
-        }
-    }
-}
-#Preview {
-    MessageField()
-        .environmentObject(MessaageManagaer())
-}
-

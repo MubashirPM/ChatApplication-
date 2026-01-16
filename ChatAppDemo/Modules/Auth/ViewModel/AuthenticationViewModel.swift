@@ -22,6 +22,7 @@ class AuthenticationViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var errorMessage: String?
     @Published var isAuthenticated = false
+    @Published var currentUser: UserModel?
     
     // MARK: - Private Properties
     
@@ -32,6 +33,7 @@ class AuthenticationViewModel: ObservableObject {
     
     init() {
         checkAuthenticationState()
+        loadCurrentUser()
     }
     
     // MARK: - Authentication State Management
@@ -128,6 +130,9 @@ class AuthenticationViewModel: ObservableObject {
             // Save user to Firestore
             await saveUserToFirestore(user: firebaseUser)
             
+            // Load current user info
+            await loadCurrentUserFromFirestore(userId: firebaseUser.uid)
+            
             // Save authentication state
             saveAuthenticationState(true)
             isLoading = false
@@ -171,6 +176,34 @@ class AuthenticationViewModel: ObservableObject {
         }
     }
     
+    // MARK: - Current User Management
+    
+    /// Load current user from Firestore
+    private func loadCurrentUser() {
+        guard let userId = Auth.auth().currentUser?.uid else {
+            currentUser = nil
+            return
+        }
+        
+        Task {
+            await loadCurrentUserFromFirestore(userId: userId)
+        }
+    }
+    
+    /// Load user data from Firestore
+    private func loadCurrentUserFromFirestore(userId: String) async {
+        let userRef = db.collection("Users").document(userId)
+        
+        do {
+            let document = try await userRef.getDocument()
+            if document.exists {
+                currentUser = try document.data(as: UserModel.self)
+            }
+        } catch {
+            debugPrint("Error loading current user: \(error.localizedDescription)")
+        }
+    }
+    
     // MARK: - Sign Out
     
     /// Sign out the current user
@@ -178,6 +211,7 @@ class AuthenticationViewModel: ObservableObject {
         do {
             try Auth.auth().signOut()
             GIDSignIn.sharedInstance.signOut()
+            currentUser = nil
             saveAuthenticationState(false)
             errorMessage = nil
         } catch {

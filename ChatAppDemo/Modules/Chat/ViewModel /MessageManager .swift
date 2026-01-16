@@ -36,12 +36,18 @@ class MessaageManagaer : ObservableObject {
             self.messages.sort { $0.timestamp < $1.timestamp }
         }
     }
-    func sentMessage(text : String) {
+    func sentMessage(text: String, senderId: String, receiverId: String) {
         do {
-            let newMessage = Message(id: "\(UUID())", text: text, received: false, timestamp: Date())
+            let newMessage = Message(
+                id: nil,
+                text: text,
+                senderId: senderId,
+                receiverId: receiverId,
+                timestamp: Date()
+            )
             try db.collection("Message").document().setData(from: newMessage)
         } catch {
-            debugPrint("Error adding message to firestore:\(error)")
+            debugPrint("Error adding message to firestore: \(error)")
         }
     }
 }
