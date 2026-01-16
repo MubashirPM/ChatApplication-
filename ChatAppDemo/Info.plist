@@ -2,17 +2,18 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>privaPrivacy - Microphone Usage Description
-Privacy - Microphone Usage Description
-Privacy - Microphone Usage Description
-Privacy - Microphone Usage Description
-Privacy - Microphone Usage Description
-Privacy - Microphone Usage Description
-Privacy - Microphone Usage Description
-Privacy - Microphone Usage Description
-</key>
-	<string>This app needs microphone access to record voice messages.
-This app needs microphone access to record voice messages.
-</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>This app needs microphone access to record voice messages.</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.googleusercontent.apps.117933437361-ese12fls8c55gg8h360vkr5ian1f80q9</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>
