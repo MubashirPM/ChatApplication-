@@ -32,17 +32,36 @@ struct MessageFieldView: View {
                     .background(isRecording ? Color.red : Color.gray)
                     .cornerRadius(50)
             }
-            .gesture(
+            .simultaneousGesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { _ in
                         if !isRecording {
                             isRecording = true
-                            recorder.startRecording()
+                            _ = recorder.startRecording()
                         }
                     }
                     .onEnded { _ in
-                        isRecording = false
-                        recorder.stopRecording()
+                        if isRecording {
+                            isRecording = false
+                            let (audioURL, duration) = recorder.stopRecording()
+                            
+                            // Only send if recording duration is more than 0.5 seconds
+                            if let url = audioURL, duration > 0.5 {
+                                Task {
+                                    await chatManager.sendVoiceMessage(
+                                        audioURL: url,
+                                        duration: duration,
+                                        chatId: chatId,
+                                        senderId: senderId,
+                                        receiverId: receiverId
+                                    )
+                                }
+                            } else if let url = audioURL {
+                                // Cancel if too short
+                                recorder.cancelRecording()
+                                try? FileManager.default.removeItem(at: url)
+                            }
+                        }
                     }
             )
             

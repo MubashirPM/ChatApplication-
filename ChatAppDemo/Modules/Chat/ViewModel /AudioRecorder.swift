@@ -12,16 +12,22 @@ import AVFoundation
 class AudioRecorder: NSObject, ObservableObject {
     
     var audioRecorder: AVAudioRecorder?
+    private var recordingStartTime: Date?
+    private var audioURL: URL?
     
-    func startRecording() {
+    /// Start recording audio
+    /// - Returns: The URL where the audio will be saved
+    func startRecording() -> URL? {
         let audioSession = AVAudioSession.sharedInstance()
         
         do {
             try audioSession.setCategory(.playAndRecord, mode: .default)
             try audioSession.setActive(true)
             
+            // Create unique filename for each recording
+            let fileName = "voiceMessage_\(UUID().uuidString).m4a"
             let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-                .appendingPathComponent("voiceMessage.m4a")
+                .appendingPathComponent(fileName)
             
             let settings: [String: Any] = [
                 AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
@@ -33,15 +39,48 @@ class AudioRecorder: NSObject, ObservableObject {
             audioRecorder = try AVAudioRecorder(url: url, settings: settings)
             audioRecorder?.record()
             
-            print("Recording started")
+            recordingStartTime = Date()
+            audioURL = url
+            
+            debugPrint("Recording started at: \(url.path)")
+            return url
             
         } catch {
-            print("Failed to start recording")
+            debugPrint("Failed to start recording: \(error.localizedDescription)")
+            return nil
         }
     }
     
-    func stopRecording() {
+    /// Stop recording and get the audio file URL and duration
+    /// - Returns: Tuple containing audio URL and duration in seconds
+    func stopRecording() -> (url: URL?, duration: Double) {
         audioRecorder?.stop()
-        print("Recording stopped")
+        
+        let duration: Double
+        if let startTime = recordingStartTime {
+            duration = Date().timeIntervalSince(startTime)
+        } else {
+            duration = 0
+        }
+        
+        recordingStartTime = nil
+        let url = audioURL
+        audioURL = nil
+        
+        debugPrint("Recording stopped. Duration: \(duration) seconds")
+        return (url, duration)
+    }
+    
+    /// Cancel current recording and delete the file
+    func cancelRecording() {
+        audioRecorder?.stop()
+        
+        if let url = audioURL {
+            try? FileManager.default.removeItem(at: url)
+        }
+        
+        recordingStartTime = nil
+        audioURL = nil
+        debugPrint("Recording cancelled")
     }
 }

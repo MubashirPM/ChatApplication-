@@ -7,6 +7,8 @@
 
 import Foundation
 import FirebaseFirestore
+// TODO: Add FirebaseStorage package dependency in Xcode
+// import FirebaseStorage
 import Combine
 
 /// ViewModel for managing chats and messages
@@ -22,6 +24,8 @@ class ChatManager: ObservableObject {
     // MARK: - Private Properties
     
     private let db = Firestore.firestore()
+    // TODO: Uncomment after adding FirebaseStorage package
+    // private let storage = Storage.storage()
     private var messagesListener: ListenerRegistration?
     private var currentChatId: String?
     
@@ -100,14 +104,15 @@ class ChatManager: ObservableObject {
             }
     }
     
-    /// Send a message in a chat
+    /// Send a text message in a chat
     func sendMessage(text: String, chatId: String, senderId: String, receiverId: String) {
         let message = Message(
             id: nil,
             text: text,
             senderId: senderId,
             receiverId: receiverId,
-            timestamp: Date()
+            timestamp: Date(),
+            messageType: .text
         )
         
         do {
@@ -126,6 +131,106 @@ class ChatManager: ObservableObject {
             
         } catch {
             errorMessage = "Error sending message: \(error.localizedDescription)"
+        }
+    }
+    
+    /// Send a voice message in a chat
+    /// NOTE: Requires FirebaseStorage package to be added in Xcode
+    func sendVoiceMessage(
+        audioURL: URL,
+        duration: Double,
+        chatId: String,
+        senderId: String,
+        receiverId: String
+    ) async {
+        isLoading = true
+        
+        // TODO: Uncomment after adding FirebaseStorage package dependency
+        /*
+        // Upload audio file to Firebase Storage
+        let fileName = "voiceMessages/\(UUID().uuidString).m4a"
+        let storageRef = storage.reference().child(fileName)
+        
+        do {
+            // Upload the audio file
+            _ = try await storageRef.putFile(from: audioURL)
+            
+            // Get the download URL
+            let downloadURL = try await storageRef.downloadURL()
+            
+            // Create message with audio URL
+            let message = Message(
+                id: nil,
+                text: "🎤 Voice message",
+                senderId: senderId,
+                receiverId: receiverId,
+                timestamp: Date(),
+                messageType: .audio,
+                audioURL: downloadURL.absoluteString,
+                audioDuration: duration
+            )
+            
+            let messageRef = db.collection("Chats")
+                .document(chatId)
+                .collection("Messages")
+                .document()
+            
+            try messageRef.setData(from: message)
+            
+            // Update chat's last message
+            db.collection("Chats").document(chatId).updateData([
+                "lastMessage": "🎤 Voice message",
+                "lastMessageTimestamp": Date()
+            ])
+            
+            // Delete local file after upload
+            try? FileManager.default.removeItem(at: audioURL)
+            
+            isLoading = false
+            
+        } catch {
+            errorMessage = "Error sending voice message: \(error.localizedDescription)"
+            isLoading = false
+        }
+        */
+        
+        // Temporary: Store audio as base64 in Firestore (not recommended for production)
+        // This is a workaround until FirebaseStorage is added
+        do {
+            let audioData = try Data(contentsOf: audioURL)
+            let base64Audio = audioData.base64EncodedString()
+            
+            let message = Message(
+                id: nil,
+                text: "🎤 Voice message",
+                senderId: senderId,
+                receiverId: receiverId,
+                timestamp: Date(),
+                messageType: .audio,
+                audioURL: base64Audio, // Temporarily storing as base64
+                audioDuration: duration
+            )
+            
+            let messageRef = db.collection("Chats")
+                .document(chatId)
+                .collection("Messages")
+                .document()
+            
+            try messageRef.setData(from: message)
+            
+            try await db.collection("Chats").document(chatId).updateData([
+                "lastMessage": "🎤 Voice message",
+                "lastMessageTimestamp": Date()
+            ])
+            
+            // Delete local file
+            try? FileManager.default.removeItem(at: audioURL)
+            
+            isLoading = false
+            
+        } catch {
+            errorMessage = "Error sending voice message: \(error.localizedDescription)"
+            isLoading = false
         }
     }
     
