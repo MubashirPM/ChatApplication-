@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import FirebaseAuth
 
 struct ChatListView: View {
     @EnvironmentObject var authViewModel: AuthenticationViewModel
@@ -44,7 +45,10 @@ struct ChatListView: View {
             }
             .navigationTitle("Chats")
             .onAppear {
-                if let currentUserId = authViewModel.currentUser?.id {
+                // Get current user ID from Firebase Auth (most reliable) or from currentUser model
+                let currentUserId = Auth.auth().currentUser?.uid ?? authViewModel.currentUser?.id
+                
+                if let currentUserId = currentUserId {
                     userManager.fetchUsers(excludingUserId: currentUserId)
                     
                     // Clean up invalid users on first load
@@ -52,11 +56,16 @@ struct ChatListView: View {
                         await userManager.cleanupInvalidUsers()
                         // Refresh users after cleanup
                         await MainActor.run {
-                            if let currentUserId = authViewModel.currentUser?.id {
-                                userManager.fetchUsers(excludingUserId: currentUserId)
+                            // Re-fetch current user ID in case it changed
+                            let refreshedUserId = Auth.auth().currentUser?.uid ?? authViewModel.currentUser?.id
+                            if let refreshedUserId = refreshedUserId {
+                                userManager.fetchUsers(excludingUserId: refreshedUserId)
                             }
                         }
                     }
+                } else {
+                    // No current user, just fetch all users (they'll be filtered in UserManager)
+                    userManager.fetchUsers(excludingUserId: nil)
                 }
             }
         }

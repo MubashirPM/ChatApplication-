@@ -27,6 +27,7 @@ class AuthenticationViewModel: ObservableObject {
     @Published var isAuthenticated = false
     @Published var currentUser: UserModel?
     @Published var needsOTPVerification = false // New: Track if OTP verification is needed
+    @Published var isInitializing = true // Track if initial auth check is in progress
     
     // MARK: - Private Properties
     
@@ -70,19 +71,20 @@ class AuthenticationViewModel: ObservableObject {
                         _ = try await user.getIDToken(forcingRefresh: false)
                         
                         // User exists and is valid
-                        // Check OTP verification status before setting authenticated
+                        // Load user data
                         await self.loadCurrentUserFromFirestore(userId: user.uid)
                         
-                        // If user has verified OTP, set authenticated
-                        // Otherwise, needsOTPVerification will be set by loadCurrentUserFromFirestore
-                        if let currentUser = self.currentUser, 
-                           let isOTPVerified = currentUser.isOTPVerified, 
-                           isOTPVerified {
-                            self.isAuthenticated = true
-                            self.saveAuthenticationState(true)
+                        // Check if user is already authenticated in current session
+                        // If yes, keep authenticated (session persists)
+                        // If no, they need to sign in again (which will require OTP)
+                        if self.isAuthenticated && !self.needsOTPVerification {
+                            // User is already authenticated in current session, keep authenticated
+                            // This handles app state restoration without requiring OTP again
                         } else {
-                            // User hasn't verified OTP yet
-                            self.needsOTPVerification = true
+                            // User is not authenticated, but don't set needsOTPVerification here
+                            // OTP will be required when they sign in (handled in saveUserToFirestore)
+                            self.isAuthenticated = false
+                            self.needsOTPVerification = false
                         }
                         
                     } catch let error as NSError {
@@ -175,6 +177,11 @@ class AuthenticationViewModel: ObservableObject {
     /// Validate user existence and check authentication state on app launch
     /// This ensures that if a user was deleted from Firebase Console, they are logged out
     private func validateAndCheckAuthenticationState() async {
+        defer {
+            // Always set isInitializing to false when function completes
+            isInitializing = false
+        }
+        
         guard let user = Auth.auth().currentUser else {
             // No user in cache, check UserDefaults
             let savedAuthState = UserDefaults.standard.bool(forKey: authStateKey)
@@ -199,19 +206,22 @@ class AuthenticationViewModel: ObservableObject {
             _ = try await user.getIDToken(forcingRefresh: true)
             
             // User exists and is valid
-            // Load user to check OTP verification status
+            // Load user data
             await loadCurrentUserFromFirestore(userId: user.uid)
             
-            // Check if user has verified OTP
-            if let currentUser = currentUser, 
-               let isOTPVerified = currentUser.isOTPVerified, 
-               isOTPVerified {
-                // User has verified OTP, allow access
+            // Check if user was already authenticated in previous session
+            // If yes, keep them authenticated (session persists)
+            // If no, they need to sign in again (which will require OTP)
+            let savedAuthState = UserDefaults.standard.bool(forKey: authStateKey)
+            if savedAuthState {
+                // User was authenticated in previous session, keep authenticated
+                // This allows session to persist across app launches
                 isAuthenticated = true
-                saveAuthenticationState(true)
+                needsOTPVerification = false
             } else {
-                // User hasn't verified OTP yet, require verification
-                needsOTPVerification = true
+                // User was not authenticated, require new login (which will require OTP)
+                isAuthenticated = false
+                needsOTPVerification = false
             }
             
             debugPrint("User validated successfully: \(user.uid)")
@@ -380,36 +390,17 @@ class AuthenticationViewModel: ObservableObject {
             let documentSnapshot = try await userRef.getDocument()
             
             if documentSnapshot.exists {
-                // User already exists, check if OTP is verified
-                if let existingUser = try? documentSnapshot.data(as: UserModel.self) {
-                    // User exists - check OTP verification status
-                    let isOTPVerified = existingUser.isOTPVerified ?? false
-                    
-                    // Only update basic info, don't overwrite isOTPVerified
-                    try await userRef.updateData([
-                        "email": user.email ?? "",
-                        "name": user.displayName ?? "",
-                        "photoURL": user.photoURL?.absoluteString ?? ""
-                    ])
-                    
-                    // Set needsOTPVerification based on existing status
-                    if !isOTPVerified {
-                        needsOTPVerification = true
-                    } else {
-                        // User already verified OTP before, skip OTP screen
-                        isAuthenticated = true
-                        saveAuthenticationState(true)
-                    }
-                } else {
-                    // Document exists but can't decode - update anyway
-                    try await userRef.updateData([
-                        "email": user.email ?? "",
-                        "name": user.displayName ?? "",
-                        "photoURL": user.photoURL?.absoluteString ?? ""
-                    ])
-                    // Assume OTP not verified if we can't read the document
-                    needsOTPVerification = true
-                }
+                // User already exists - update basic info
+                // Always require OTP verification on every login
+                try await userRef.updateData([
+                    "email": user.email ?? "",
+                    "name": user.displayName ?? "",
+                    "photoURL": user.photoURL?.absoluteString ?? "",
+                    "isOTPVerified": false // Reset OTP verification status on each login
+                ])
+                
+                // Always require OTP verification for every login
+                needsOTPVerification = true
             } else {
                 // Create new user document (first time login)
                 let userModel = UserModel(
@@ -629,6 +620,17 @@ class AuthenticationViewModel: ObservableObject {
     
     /// Sign out the current user
     func signOut() {
+        // Get user ID before signing out (will be nil after signOut)
+        let userId = Auth.auth().currentUser?.uid
+        
+        // Reset OTP verification status in Firestore before signing out
+        if let userId = userId {
+            Task {
+                let userRef = db.collection("Users").document(userId)
+                try? await userRef.updateData(["isOTPVerified": false])
+            }
+        }
+        
         do {
             try Auth.auth().signOut()
             GIDSignIn.sharedInstance.signOut()

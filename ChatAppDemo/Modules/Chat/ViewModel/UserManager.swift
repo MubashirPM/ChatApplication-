@@ -66,14 +66,31 @@ class UserManager: ObservableObject {
                 Task { @MainActor [weak self] in
                     guard let self = self else { return }
                     
+                    // Get current Firebase Auth UID for comparison
+                    let currentAuthUID = Auth.auth().currentUser?.uid
+                    
                     var validUsers: [UserModel] = []
                     
                     for document in documents {
                         do {
                             let user = try document.data(as: UserModel.self)
                             
-                            // Exclude current user if provided
-                            if let excludingUserId = excludingUserId, user.id == excludingUserId {
+                            // Exclude current user by comparing:
+                            // 1. Document ID (which should be Firebase Auth UID)
+                            // 2. User.id field (from @DocumentID)
+                            // 3. Current Firebase Auth UID
+                            let documentId = document.documentID
+                            let userId = user.id ?? documentId
+                            
+                            // Skip if this is the current user
+                            if let excludingUserId = excludingUserId, 
+                               (userId == excludingUserId || documentId == excludingUserId) {
+                                continue
+                            }
+                            
+                            // Also exclude if document ID or user ID matches current Firebase Auth UID
+                            if let currentAuthUID = currentAuthUID,
+                               (documentId == currentAuthUID || userId == currentAuthUID) {
                                 continue
                             }
                             

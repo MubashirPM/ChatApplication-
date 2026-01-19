@@ -31,7 +31,23 @@ struct ChatAppDemoApp: App {
     var body: some Scene {
         WindowGroup {
             Group {
-                if authViewModel.isAuthenticated {
+                if authViewModel.isInitializing {
+                    // Show loading screen while checking authentication state
+                    // This prevents the flash of login screen for logged-in users
+                    ZStack {
+                        Color.peach.opacity(0.1)
+                            .ignoresSafeArea()
+                        
+                        VStack(spacing: 16) {
+                            ProgressView()
+                                .scaleEffect(1.5)
+                            
+                            Text("Loading...")
+                                .font(.subheadline)
+                                .foregroundStyle(.gray)
+                        }
+                    }
+                } else if authViewModel.isAuthenticated {
                     // User is fully authenticated (OTP verified)
                     TabBarView()
                         .environmentObject(authViewModel)
