@@ -46,6 +46,17 @@ struct ChatListView: View {
             .onAppear {
                 if let currentUserId = authViewModel.currentUser?.id {
                     userManager.fetchUsers(excludingUserId: currentUserId)
+                    
+                    // Clean up invalid users on first load
+                    Task {
+                        await userManager.cleanupInvalidUsers()
+                        // Refresh users after cleanup
+                        await MainActor.run {
+                            if let currentUserId = authViewModel.currentUser?.id {
+                                userManager.fetchUsers(excludingUserId: currentUserId)
+                            }
+                        }
+                    }
                 }
             }
         }

@@ -32,14 +32,22 @@ struct ChatAppDemoApp: App {
         WindowGroup {
             Group {
                 if authViewModel.isAuthenticated {
-                    ChatListView()
+                    TabBarView()
+                        .environmentObject(authViewModel)
                 } else {
                     AutheticationView()
+                        .environmentObject(authViewModel)
                 }
             }
-            .environmentObject(authViewModel)
             .onOpenURL { url in
                 GIDSignIn.sharedInstance.handle(url)
+            }
+            .onAppear {
+                // Re-validate user when app appears
+                // This ensures deleted users are detected even if app was in background
+                Task {
+                    await authViewModel.validateUserOnAppAppear()
+                }
             }
         }
     }

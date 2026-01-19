@@ -57,21 +57,39 @@ struct VoiceMessagePlayer: View {
     @StateObject private var audioPlayer = AudioPlayerManager()
     @State private var isPlaying = false
     @State private var currentTime: Double = 0
+    @State private var tempAudioURL: URL?
     
     var body: some View {
         HStack(spacing: 12) {
             // Play/Pause Button
             Button {
-                if isPlaying {
+                if audioPlayer.isPlaying {
                     audioPlayer.pause()
                 } else {
-                    if let urlString = audioURL, let url = URL(string: urlString) {
-                        audioPlayer.play(url: url)
+                    // Handle base64 encoded audio or URL
+                    if let urlString = audioURL {
+                        var playURL: URL?
+                        
+                        if let url = URL(string: urlString), url.scheme != nil {
+                            // It's a valid URL (from Firebase Storage)
+                            playURL = url
+                        } else {
+                            // It's base64 encoded (current workaround)
+                            playURL = getAudioURLFromBase64(base64String: urlString)
+                            if playURL != nil {
+                                tempAudioURL = playURL
+                            }
+                        }
+                        
+                        if let url = playURL {
+                            audioPlayer.play(url: url)
+                        } else {
+                            debugPrint("Failed to get audio URL for playback")
+                        }
                     }
                 }
-                isPlaying.toggle()
             } label: {
-                Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                Image(systemName: audioPlayer.isPlaying ? "pause.circle.fill" : "play.circle.fill")
                     .font(.title2)
                     .foregroundStyle(.white)
             }
@@ -112,8 +130,38 @@ struct VoiceMessagePlayer: View {
         .onReceive(audioPlayer.$isPlaying) { playing in
             isPlaying = playing
             if !playing && currentTime >= duration {
+                // Reset to beginning when finished
                 currentTime = 0
             }
+        }
+        .onDisappear {
+            // Clean up temporary file when view disappears
+            if let tempURL = tempAudioURL {
+                try? FileManager.default.removeItem(at: tempURL)
+                tempAudioURL = nil
+            }
+            audioPlayer.stop()
+        }
+    }
+    
+    /// Convert base64 string to temporary audio file URL
+    private func getAudioURLFromBase64(base64String: String) -> URL? {
+        guard let audioData = Data(base64Encoded: base64String) else {
+            debugPrint("Failed to decode base64 audio data")
+            return nil
+        }
+        
+        // Create temporary file
+        let tempDir = FileManager.default.temporaryDirectory
+        let tempFile = tempDir.appendingPathComponent("\(UUID().uuidString).m4a")
+        
+        do {
+            try audioData.write(to: tempFile)
+            debugPrint("Created temporary audio file: \(tempFile.path)")
+            return tempFile
+        } catch {
+            debugPrint("Failed to write audio data to temporary file: \(error.localizedDescription)")
+            return nil
         }
     }
     
@@ -137,9 +185,21 @@ class AudioPlayerManager: NSObject, ObservableObject {
             // Stop previous playback if any
             stop()
             
+            // Configure audio session for playback
+            let audioSession = AVAudioSession.sharedInstance()
+            try audioSession.setCategory(.playback, mode: .default)
+            try audioSession.setActive(true)
+            
+            // Create and configure audio player
             audioPlayer = try AVAudioPlayer(contentsOf: url)
             audioPlayer?.delegate = self
-            audioPlayer?.play()
+            audioPlayer?.prepareToPlay()
+            
+            // Start playback
+            guard audioPlayer?.play() == true else {
+                debugPrint("Failed to start audio playback")
+                return
+            }
             
             isPlaying = true
             
@@ -149,8 +209,11 @@ class AudioPlayerManager: NSObject, ObservableObject {
                 self.currentTime = player.currentTime
             }
             
+            debugPrint("Audio playback started: \(url.path)")
+            
         } catch {
             debugPrint("Error playing audio: \(error.localizedDescription)")
+            isPlaying = false
         }
     }
     
@@ -158,6 +221,7 @@ class AudioPlayerManager: NSObject, ObservableObject {
         audioPlayer?.pause()
         isPlaying = false
         timer?.invalidate()
+        debugPrint("Audio playback paused")
     }
     
     func stop() {
@@ -166,11 +230,26 @@ class AudioPlayerManager: NSObject, ObservableObject {
         isPlaying = false
         currentTime = 0
         timer?.invalidate()
+        
+        // Deactivate audio session
+        try? AVAudioSession.sharedInstance().setActive(false)
+        debugPrint("Audio playback stopped")
     }
 }
 
 extension AudioPlayerManager: AVAudioPlayerDelegate {
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        isPlaying = false
+        currentTime = 0
+        timer?.invalidate()
+        
+        // Deactivate audio session when finished
+        try? AVAudioSession.sharedInstance().setActive(false)
+        debugPrint("Audio playback finished successfully: \(flag)")
+    }
+    
+    func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
+        debugPrint("Audio decode error: \(error?.localizedDescription ?? "Unknown error")")
         isPlaying = false
         currentTime = 0
         timer?.invalidate()
