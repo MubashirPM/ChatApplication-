@@ -103,18 +103,3 @@ struct SignOutView: View {
         // This is handled in ChatAppDemoApp
     }
 }
-
-#Preview {
-    let authViewModel = AuthenticationViewModel()
-    // Set a mock user for preview
-    authViewModel.currentUser = UserModel(
-        id: "preview-user",
-        name: "John Doe",
-        email: "john.doe@example.com",
-        photoURL: "",
-        createdAt: Date()
-    )
-    
-    return SignOutView()
-        .environmentObject(authViewModel)
-}

@@ -15,6 +15,7 @@ struct UserModel: Codable, Identifiable {
     let email: String
     let photoURL: String
     let createdAt: Date
+    let isOTPVerified: Bool? // Track if user has completed OTP verification
     
     enum CodingKeys: String, CodingKey {
         case id
@@ -22,5 +23,6 @@ struct UserModel: Codable, Identifiable {
         case email
         case photoURL
         case createdAt
+        case isOTPVerified
     }
 }

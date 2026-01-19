@@ -13,7 +13,7 @@ struct ChatDetailView: View {
     @StateObject private var chatManager = ChatManager()
     @State private var chatId: String?
     @State private var isLoadingChat = true
-    
+
     var body: some View {
         VStack(spacing: 0) {
             // Header with other user info
@@ -21,9 +21,9 @@ struct ChatDetailView: View {
                 name: otherUser.name,
                 imageUrl: URL(string: otherUser.photoURL)
             )
-            
+                
             // Messages
-            ScrollView {
+                ScrollView {
                 LazyVStack(spacing: 8) {
                     if chatManager.isLoading && chatManager.messages.isEmpty {
                         ProgressView()
@@ -43,7 +43,7 @@ struct ChatDetailView: View {
                 }
                 .padding(.top, 10)
             }
-            .background(Color.white)
+                .background(Color.white)
             .cornerRadius(30, corners: [.topLeft, .topRight])
             
             // Message Input Field
@@ -55,8 +55,8 @@ struct ChatDetailView: View {
                 )
                 .environmentObject(chatManager)
             }
-        }
-        .background(Color("peach"))
+            }
+            .background(Color("peach"))
         .navigationBarTitleDisplayMode(.inline)
         .task {
             await setupChat()
@@ -124,21 +124,5 @@ struct TitleComponentView: View {
                 .clipShape(Circle())
         }
         .padding()
-    }
-}
-
-
-#Preview {
-    NavigationStack {
-        ChatDetailView(
-            otherUser: UserModel(
-                id: "123",
-                name: "John Doe",
-                email: "john@example.com",
-                photoURL: "",
-                createdAt: Date()
-            )
-        )
-        .environmentObject(AuthenticationViewModel())
     }
 }

@@ -32,9 +32,15 @@ struct ChatAppDemoApp: App {
         WindowGroup {
             Group {
                 if authViewModel.isAuthenticated {
+                    // User is fully authenticated (OTP verified)
                     TabBarView()
                         .environmentObject(authViewModel)
+                } else if authViewModel.needsOTPVerification {
+                    // User signed in with Google/Facebook but needs OTP verification
+                    CustomizableOTPView()
+                        .environmentObject(authViewModel)
                 } else {
+                    // Show login screen
                     AutheticationView()
                         .environmentObject(authViewModel)
                 }

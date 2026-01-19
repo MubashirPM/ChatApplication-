@@ -26,6 +26,7 @@ class AuthenticationViewModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var isAuthenticated = false
     @Published var currentUser: UserModel?
+    @Published var needsOTPVerification = false // New: Track if OTP verification is needed
     
     // MARK: - Private Properties
     
@@ -69,9 +70,20 @@ class AuthenticationViewModel: ObservableObject {
                         _ = try await user.getIDToken(forcingRefresh: false)
                         
                         // User exists and is valid
-                        self.isAuthenticated = true
-                        self.saveAuthenticationState(true)
+                        // Check OTP verification status before setting authenticated
                         await self.loadCurrentUserFromFirestore(userId: user.uid)
+                        
+                        // If user has verified OTP, set authenticated
+                        // Otherwise, needsOTPVerification will be set by loadCurrentUserFromFirestore
+                        if let currentUser = self.currentUser, 
+                           let isOTPVerified = currentUser.isOTPVerified, 
+                           isOTPVerified {
+                            self.isAuthenticated = true
+                            self.saveAuthenticationState(true)
+                        } else {
+                            // User hasn't verified OTP yet
+                            self.needsOTPVerification = true
+                        }
                         
                     } catch let error as NSError {
                         // Check if error is due to user being deleted/disabled
@@ -132,6 +144,7 @@ class AuthenticationViewModel: ObservableObject {
         
         // Clear authentication state
         isAuthenticated = false
+        needsOTPVerification = false
         currentUser = nil
         UserDefaults.standard.set(false, forKey: authStateKey)
         errorMessage = nil
@@ -186,9 +199,20 @@ class AuthenticationViewModel: ObservableObject {
             _ = try await user.getIDToken(forcingRefresh: true)
             
             // User exists and is valid
-            isAuthenticated = true
-            saveAuthenticationState(true)
+            // Load user to check OTP verification status
             await loadCurrentUserFromFirestore(userId: user.uid)
+            
+            // Check if user has verified OTP
+            if let currentUser = currentUser, 
+               let isOTPVerified = currentUser.isOTPVerified, 
+               isOTPVerified {
+                // User has verified OTP, allow access
+                isAuthenticated = true
+                saveAuthenticationState(true)
+            } else {
+                // User hasn't verified OTP yet, require verification
+                needsOTPVerification = true
+            }
             
             debugPrint("User validated successfully: \(user.uid)")
             
@@ -329,14 +353,15 @@ class AuthenticationViewModel: ObservableObject {
             let authResult = try await Auth.auth().signIn(with: credential)
             let firebaseUser = authResult.user
             
-            // Save user to Firestore
+            // Save user to Firestore (this will check OTP status and set needsOTPVerification if needed)
             await saveUserToFirestore(user: firebaseUser)
             
             // Load current user info
             await loadCurrentUserFromFirestore(userId: firebaseUser.uid)
             
-            // Save authentication state
-            saveAuthenticationState(true)
+            // saveUserToFirestore and loadCurrentUserFromFirestore will handle OTP verification status
+            // If user is new or hasn't verified OTP, needsOTPVerification will be true
+            // If user already verified OTP, isAuthenticated will be set to true
             isLoading = false
             
         } catch {
@@ -355,26 +380,56 @@ class AuthenticationViewModel: ObservableObject {
             let documentSnapshot = try await userRef.getDocument()
             
             if documentSnapshot.exists {
-                // User already exists, update if needed
-                try await userRef.updateData([
-                    "email": user.email ?? "",
-                    "name": user.displayName ?? "",
-                    "photoURL": user.photoURL?.absoluteString ?? ""
-                ])
+                // User already exists, check if OTP is verified
+                if let existingUser = try? documentSnapshot.data(as: UserModel.self) {
+                    // User exists - check OTP verification status
+                    let isOTPVerified = existingUser.isOTPVerified ?? false
+                    
+                    // Only update basic info, don't overwrite isOTPVerified
+                    try await userRef.updateData([
+                        "email": user.email ?? "",
+                        "name": user.displayName ?? "",
+                        "photoURL": user.photoURL?.absoluteString ?? ""
+                    ])
+                    
+                    // Set needsOTPVerification based on existing status
+                    if !isOTPVerified {
+                        needsOTPVerification = true
+                    } else {
+                        // User already verified OTP before, skip OTP screen
+                        isAuthenticated = true
+                        saveAuthenticationState(true)
+                    }
+                } else {
+                    // Document exists but can't decode - update anyway
+                    try await userRef.updateData([
+                        "email": user.email ?? "",
+                        "name": user.displayName ?? "",
+                        "photoURL": user.photoURL?.absoluteString ?? ""
+                    ])
+                    // Assume OTP not verified if we can't read the document
+                    needsOTPVerification = true
+                }
             } else {
-                // Create new user document
+                // Create new user document (first time login)
                 let userModel = UserModel(
                     id: user.uid,
                     name: user.displayName ?? "",
                     email: user.email ?? "",
                     photoURL: user.photoURL?.absoluteString ?? "",
-                    createdAt: Date()
+                    createdAt: Date(),
+                    isOTPVerified: false // New user, OTP not verified yet
                 )
                 
                 try userRef.setData(from: userModel)
+                
+                // New user - require OTP verification
+                needsOTPVerification = true
             }
         } catch {
             debugPrint("Error saving user to Firestore: \(error.localizedDescription)")
+            // On error, require OTP for safety
+            needsOTPVerification = true
         }
     }
     
@@ -538,14 +593,15 @@ class AuthenticationViewModel: ObservableObject {
             let authResult = try await Auth.auth().signIn(with: credential)
             let firebaseUser = authResult.user
             
-            // Save user to Firestore
+            // Save user to Firestore (this will check OTP status and set needsOTPVerification if needed)
             await saveUserToFirestore(user: firebaseUser)
             
             // Load current user info
             await loadCurrentUserFromFirestore(userId: firebaseUser.uid)
             
-            // Save authentication state
-            saveAuthenticationState(true)
+            // saveUserToFirestore and loadCurrentUserFromFirestore will handle OTP verification status
+            // If user is new or hasn't verified OTP, needsOTPVerification will be true
+            // If user already verified OTP, isAuthenticated will be set to true
             isLoading = false
             
         } catch {
@@ -579,6 +635,7 @@ class AuthenticationViewModel: ObservableObject {
             
             // Clear local state
             currentUser = nil
+            needsOTPVerification = false
             saveAuthenticationState(false)
             errorMessage = nil
             
@@ -586,6 +643,99 @@ class AuthenticationViewModel: ObservableObject {
         } catch {
             errorMessage = "Sign out failed: \(error.localizedDescription)"
             debugPrint("Sign out error: \(error.localizedDescription)")
+        }
+    }
+    
+    // MARK: - OTP Verification
+    
+    /// Verify OTP entered by user
+    /// OTP is stored in Firestore Settings collection
+    /// After successful verification, marks user as OTP verified in Firestore
+    func verifyOTP(_ enteredOTP: String) async -> Bool {
+        isLoading = true
+        errorMessage = nil
+        
+        guard let userId = Auth.auth().currentUser?.uid else {
+            errorMessage = "User not authenticated"
+            isLoading = false
+            return false
+        }
+        
+        do {
+            // Fetch OTP from Firestore Settings collection
+            let settingsRef = db.collection("Settings").document("otp")
+            let document = try await settingsRef.getDocument()
+            
+            let correctOTP: String
+            if document.exists, let data = document.data(), let otp = data["code"] as? String {
+                // OTP exists in Firestore
+                correctOTP = otp
+            } else {
+                // Default OTP if not set in Firestore
+                correctOTP = "1234"
+                // Create default OTP document in Firestore
+                try await settingsRef.setData(["code": correctOTP])
+                debugPrint("Created default OTP in Firestore: \(correctOTP)")
+            }
+            
+            // Verify entered OTP
+            if enteredOTP == correctOTP {
+                // OTP is correct - mark user as verified in Firestore
+                let userRef = db.collection("Users").document(userId)
+                try await userRef.updateData([
+                    "isOTPVerified": true
+                ])
+                
+                // Update local user model
+                if var user = currentUser {
+                    // Create updated user with OTP verified flag
+                    currentUser = UserModel(
+                        id: user.id,
+                        name: user.name,
+                        email: user.email,
+                        photoURL: user.photoURL,
+                        createdAt: user.createdAt,
+                        isOTPVerified: true
+                    )
+                }
+                
+                // Complete authentication
+                needsOTPVerification = false
+                isAuthenticated = true
+                saveAuthenticationState(true)
+                isLoading = false
+                debugPrint("OTP verified successfully and user marked as verified")
+                return true
+            } else {
+                // OTP is incorrect
+                errorMessage = "Invalid OTP. Please try again."
+                isLoading = false
+                debugPrint("OTP verification failed: entered '\(enteredOTP)', expected '\(correctOTP)'")
+                return false
+            }
+            
+        } catch {
+            errorMessage = "Error verifying OTP: \(error.localizedDescription)"
+            isLoading = false
+            debugPrint("OTP verification error: \(error.localizedDescription)")
+            return false
+        }
+    }
+    
+    /// Get current OTP from Firestore (for admin/debugging purposes)
+    func getCurrentOTP() async -> String {
+        do {
+            let settingsRef = db.collection("Settings").document("otp")
+            let document = try await settingsRef.getDocument()
+            
+            if document.exists, let data = document.data(), let otp = data["code"] as? String {
+                return otp
+            } else {
+                return "1234" // Default OTP
+            }
+        } catch {
+            debugPrint("Error fetching OTP: \(error.localizedDescription)")
+            return "1234" // Default OTP on error
         }
     }
 }
