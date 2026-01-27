@@ -11,8 +11,10 @@ struct ChatDetailView: View {
     let otherUser: UserModel
     @EnvironmentObject var authViewModel: AuthenticationViewModel
     @StateObject private var chatManager = ChatManager()
+    @StateObject private var chatListViewModel = ChatListViewModel()
     @State private var chatId: String?
     @State private var isLoadingChat = true
+    @State private var previousMessageCount = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -22,29 +24,49 @@ struct ChatDetailView: View {
                 imageUrl: URL(string: otherUser.photoURL)
             )
                 
-            // Messages
+            // Messages with ScrollViewReader for auto-scrolling
+            ScrollViewReader { scrollProxy in
                 ScrollView {
-                LazyVStack(spacing: 8) {
-                    if chatManager.isLoading && chatManager.messages.isEmpty {
-                        ProgressView()
-                            .padding()
-                    } else if chatManager.messages.isEmpty {
-                        Text("No messages yet")
-                            .foregroundStyle(.gray)
-                            .padding()
-                    } else {
-                        ForEach(chatManager.messages) { message in
-                            MessageBubble(
-                                message: message,
-                                isFromCurrentUser: message.senderId == authViewModel.currentUser?.id
-                            )
+                    LazyVStack(spacing: 8) {
+                        if chatManager.isLoading && chatManager.messages.isEmpty {
+                            ProgressView()
+                                .padding()
+                        } else if chatManager.messages.isEmpty {
+                            Text("No messages yet")
+                                .foregroundStyle(.gray)
+                                .padding()
+                        } else {
+                            ForEach(chatManager.messages) { message in
+                                MessageBubble(
+                                    message: message,
+                                    isFromCurrentUser: message.senderId == authViewModel.currentUser?.id
+                                )
+                                .id(message.id) // Add ID for scrolling
+                            }
+                        }
+                    }
+                    .padding(.top, 10)
+                }
+                .background(Color.white)
+                .cornerRadius(30, corners: [.topLeft, .topRight])
+                .onChange(of: chatManager.messages.count) { oldCount, newCount in
+                    // Scroll to last message when new message is received
+                    if newCount > previousMessageCount, let lastMessage = chatManager.messages.last {
+                        withAnimation(.easeOut(duration: 0.3)) {
+                            scrollProxy.scrollTo(lastMessage.id, anchor: .bottom)
+                        }
+                    }
+                    previousMessageCount = newCount
+                }
+                .onAppear {
+                    // Scroll to last message when view appears
+                    if let lastMessage = chatManager.messages.last {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            scrollProxy.scrollTo(lastMessage.id, anchor: .bottom)
                         }
                     }
                 }
-                .padding(.top, 10)
             }
-                .background(Color.white)
-            .cornerRadius(30, corners: [.topLeft, .topRight])
             
             // Message Input Field
             if let chatId = chatId, let currentUserId = authViewModel.currentUser?.id {
@@ -61,7 +83,24 @@ struct ChatDetailView: View {
         .task {
             await setupChat()
         }
+        .onAppear {
+            // Mark as read immediately when view appears
+            // This ensures unread badge is cleared even if user quickly navigates back
+            if let chatId = chatId {
+                chatListViewModel.markAsRead(chatId: chatId)
+            }
+        }
         .onDisappear {
+            // Mark as read when leaving to ensure it's marked even if user quickly navigates back
+            if let chatId = chatId {
+                chatListViewModel.markAsRead(chatId: chatId)
+            }
+            
+            // Clear active chat when leaving this view
+            Task { @MainActor in
+                ActiveChatTracker.shared.clearActiveChat()
+            }
+            
             chatManager.stopListening()
         }
     }
@@ -81,6 +120,20 @@ struct ChatDetailView: View {
         )
         
         if let chatId = chatId {
+            // IMPORTANT: Set active chat and mark as read IMMEDIATELY
+            // This prevents the unread indicator from showing when returning to list
+            await MainActor.run {
+                ActiveChatTracker.shared.setActiveChat(chatId)
+            }
+            
+            // Mark as read right away - this clears the unread badge
+            // Called here AND in onAppear to ensure it's marked even if user quickly navigates back
+            chatListViewModel.markAsRead(chatId: chatId)
+            
+            // Clear app badge
+            NotificationManager.shared.clearBadge()
+            
+            // Load messages
             chatManager.loadMessages(forChatId: chatId)
         }
         
@@ -117,11 +170,11 @@ struct TitleComponentView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             
-            Image(systemName: "phone.fill")
-                .foregroundStyle(.gray)
-                .padding(10)
-                .background(.white)
-                .clipShape(Circle())
+//            Image(systemName: "phone.fill")
+//                .foregroundStyle(.gray)
+//                .padding(10)
+//                .background(.white)
+//                .clipShape(Circle())
         }
         .padding()
     }

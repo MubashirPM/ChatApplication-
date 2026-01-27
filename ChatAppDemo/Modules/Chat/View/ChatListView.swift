@@ -9,109 +9,175 @@ import SwiftUI
 import FirebaseAuth
 
 struct ChatListView: View {
-    @EnvironmentObject var authViewModel: AuthenticationViewModel
-    @StateObject private var userManager = UserManager()
-    @State private var selectedUserId: String?
-    @State private var navigateToChat = false
+    @StateObject private var viewModel = ChatListViewModel()
+    @State private var showNewChat = false
     
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    if userManager.isLoading {
-                        ProgressView()
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                    } else if userManager.users.isEmpty {
-                        Text("No users available")
+                if viewModel.isLoading && viewModel.recentChats.isEmpty {
+                    ProgressView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding(.top, 50)
+                } else if viewModel.recentChats.isEmpty {
+                    VStack(spacing: 16) {
+                        Image(systemName: "message")
+                            .font(.system(size: 50))
+                            .foregroundStyle(.gray.opacity(0.5))
+                        Text("No conversations yet")
+                            .font(.headline)
                             .foregroundStyle(.gray)
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                    } else {
-                        ForEach(userManager.users) { user in
-                            NavigationLink {
-                                ChatDetailView(otherUser: user)
-                            } label: {
-                                ChatListRowView(user: user)
-                            }
-                            
-                            if user.id != userManager.users.last?.id {
-                                Divider()
-                            }
-                        }
+                        Text("Tap the pencil icon to start a new chat")
+                            .font(.subheadline)
+                            .foregroundStyle(.gray.opacity(0.8))
                     }
-                }
-                .padding(.horizontal, 16)
-            }
-            .navigationTitle("Chats")
-            .onAppear {
-                // Get current user ID from Firebase Auth (most reliable) or from currentUser model
-                let currentUserId = Auth.auth().currentUser?.uid ?? authViewModel.currentUser?.id
-                
-                if let currentUserId = currentUserId {
-                    userManager.fetchUsers(excludingUserId: currentUserId)
-                    
-                    // Clean up invalid users on first load
-                    Task {
-                        await userManager.cleanupInvalidUsers()
-                        // Refresh users after cleanup
-                        await MainActor.run {
-                            // Re-fetch current user ID in case it changed
-                            let refreshedUserId = Auth.auth().currentUser?.uid ?? authViewModel.currentUser?.id
-                            if let refreshedUserId = refreshedUserId {
-                                userManager.fetchUsers(excludingUserId: refreshedUserId)
-                            }
-                        }
-                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 100)
                 } else {
-                    // No current user, just fetch all users (they'll be filtered in UserManager)
-                    userManager.fetchUsers(excludingUserId: nil)
+                    LazyVStack(spacing: 0) {
+                        ForEach(viewModel.recentChats) { recentChat in
+                            // Only show valid chats
+                            if let otherUser = recentChat.otherUser,
+                               let currentUserId = Auth.auth().currentUser?.uid {
+                                NavigationLink {
+                                    ChatDetailView(otherUser: otherUser)
+                                } label: {
+                                    RecentChatRowView(
+                                        recentChat: recentChat,
+                                        currentUserId: currentUserId
+                                    )
+                                    .contentShape(Rectangle()) // Make full row tappable
+                                }
+                                .buttonStyle(.plain) // Remove default list button style
+                                
+                                Divider()
+                                    .padding(.leading, 78) // Indent divider to match avatar
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 10)
                 }
+            }
+            .background(Color(.systemGroupedBackground)) // Subtle background
+            .navigationTitle("Chats")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(action: { showNewChat = true }) {
+                        Image(systemName: "square.and.pencil")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundStyle(Color.primary)
+                    }
+                }
+            }
+            .sheet(isPresented: $showNewChat) {
+                UserListView()
+            }
+            .onAppear {
+                viewModel.startListening()
+            }
+            .onDisappear {
+                viewModel.stopListening()
             }
         }
     }
 }
 
-// MARK: - Chat List Row View
-
-struct ChatListRowView: View {
-    let user: UserModel
+struct RecentChatRowView: View {
+    let recentChat: RecentChat
+    let currentUserId: String
+    
+    private var formattedTime: String {
+        guard let date = recentChat.chat.lastMessageTimestamp else { return "" }
+        let formatter = DateFormatter()
+        if Calendar.current.isDateInToday(date) {
+            formatter.dateFormat = "h:mm a"
+        } else if Calendar.current.isDateInYesterday(date) {
+            return "Yesterday"
+        } else {
+            formatter.dateFormat = "MM/dd/yy"
+        }
+        return formatter.string(from: date)
+    }
+    
+    private var unreadCount: Int {
+        recentChat.chat.getUnreadCount(for: currentUserId)
+    }
+    
+    private var hasUnread: Bool {
+        unreadCount > 0
+    }
     
     var body: some View {
-        HStack(spacing: 12) {
-            // User Avatar
-            AsyncImage(url: URL(string: user.photoURL)) { image in
-                image
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-            } placeholder: {
-                Image(systemName: "person.circle.fill")
-                    .foregroundStyle(.gray)
-            }
-            .frame(width: 50, height: 50)
-            .clipShape(Circle())
-            
-            // User Info
-            VStack(alignment: .leading, spacing: 4) {
-                Text(user.name)
-                    .font(.headline)
-                    .foregroundStyle(.primary)
+        HStack(spacing: 16) {
+            // Avatar with badge overlay
+            ZStack(alignment: .topTrailing) {
+                if let user = recentChat.otherUser {
+                    AsyncImage(url: URL(string: user.photoURL)) { image in
+                        image
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                    } placeholder: {
+                        Image(systemName: "person.circle.fill")
+                            .resizable()
+                            .foregroundStyle(.gray.opacity(0.3))
+                    }
+                    .frame(width: 56, height: 56)
+                    .clipShape(Circle())
+                } else {
+                    Image(systemName: "person.circle.fill")
+                        .resizable()
+                        .frame(width: 56, height: 56)
+                        .foregroundStyle(.gray.opacity(0.3))
+                }
                 
-                Text(user.email)
-                    .font(.caption)
-                    .foregroundStyle(.gray)
+                // Unread badge (red dot)
+                if hasUnread {
+                    Circle()
+                        .fill(Color.red)
+                        .frame(width: 20, height: 20)
+                        .overlay(
+                            Text("\(unreadCount)")
+                                .font(.caption2)
+                                .fontWeight(.bold)
+                                .foregroundStyle(.white)
+                        )
+                        .offset(x: 4, y: -4)
+                }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(recentChat.otherUser?.name ?? "Unknown User")
+                        .font(.headline)
+                        .fontWeight(hasUnread ? .bold : .regular)
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    
+                    Spacer()
+                    
+                    Text(formattedTime)
+                        .font(.caption)
+                        .foregroundStyle(hasUnread ? .primary : .secondary)
+                        .fontWeight(hasUnread ? .semibold : .regular)
+                }
+                
+                Text(recentChat.chat.lastMessage ?? "No messages")
+                    .font(.subheadline)
+                    .foregroundStyle(hasUnread ? .primary : .secondary)
+                    .fontWeight(hasUnread ? .medium : .regular)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+            }
             
             Image(systemName: "chevron.right")
-                .foregroundStyle(.gray)
                 .font(.caption)
+                .foregroundStyle(.tertiary)
         }
-        .padding(.vertical, 8)
+        .padding(.vertical, 12)
     }
 }
 
 #Preview {
     ChatListView()
-        .environmentObject(AuthenticationViewModel())
 }

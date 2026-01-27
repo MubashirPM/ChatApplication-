@@ -52,9 +52,25 @@ struct ChatAppDemoApp: App {
                     TabBarView()
                         .environmentObject(authViewModel)
                 } else if authViewModel.needsOTPVerification {
-                    // User signed in with Google/Facebook but needs OTP verification
-                    CustomizableOTPView()
+                    // User signed in with Google but needs OTP verification
+                    CustomizableOTPView() 
                         .environmentObject(authViewModel)
+                } else if authViewModel.isAuthenticating {
+                    // Authentication in progress - show loading to prevent flicker
+                    // This prevents showing login screen during state transitions
+                    ZStack {
+                        Color.peach.opacity(0.1)
+                            .ignoresSafeArea()
+                        
+                        VStack(spacing: 16) {
+                            ProgressView()
+                                .scaleEffect(1.5)
+                            
+                            Text("Authenticating...")
+                                .font(.subheadline)
+                                .foregroundStyle(.gray)
+                        }
+                    }
                 } else {
                     // Show login screen
                     AutheticationView()
@@ -69,6 +85,11 @@ struct ChatAppDemoApp: App {
                 // This ensures deleted users are detected even if app was in background
                 Task {
                     await authViewModel.validateUserOnAppAppear()
+                    
+                    // Request notification permissions if authenticated
+                    if authViewModel.isAuthenticated {
+                        NotificationManager.shared.requestPermission()
+                    }
                 }
             }
         }

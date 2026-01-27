@@ -91,24 +91,24 @@ struct VoiceMessagePlayer: View {
             } label: {
                 Image(systemName: audioPlayer.isPlaying ? "pause.circle.fill" : "play.circle.fill")
                     .font(.title2)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.gray)
             }
             
             // Duration/Progress
             VStack(alignment: .leading, spacing: 4) {
                 Text(formatDuration(currentTime > 0 ? currentTime : duration))
                     .font(.caption)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.gray)
                 
                 // Progress bar
                 GeometryReader { geometry in
                     ZStack(alignment: .leading) {
                         Rectangle()
-                            .fill(Color.white.opacity(0.3))
+                            .fill(Color.gray.opacity(0.3))
                             .frame(height: 2)
                         
                         Rectangle()
-                            .fill(Color.white)
+                            .fill(Color.gray)
                             .frame(width: geometry.size.width * (currentTime / max(duration, 1)), height: 2)
                     }
                 }
@@ -118,7 +118,7 @@ struct VoiceMessagePlayer: View {
             // Waveform icon (optional visual indicator)
             Image(systemName: "waveform")
                 .font(.caption)
-                .foregroundStyle(.white.opacity(0.7))
+                .foregroundStyle(.gray.opacity(0.7))
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)

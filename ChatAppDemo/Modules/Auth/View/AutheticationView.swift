@@ -59,32 +59,6 @@ struct AutheticationView: View {
                     .cornerRadius(8)
                 }
                 .disabled(viewModel.isLoading)
-                
-                // Facebook Sign-In Button
-                Button {
-                    Task {
-                        await viewModel.signInWithFacebook()
-                    }
-                } label: {
-                    HStack {
-                        if viewModel.isLoading {
-                            ProgressView()
-                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                        } else {
-                            Image(systemName: "f.circle.fill")
-                                .foregroundStyle(.white)
-                        }
-                        
-                        Text(viewModel.isLoading ? "Signing in..." : "Continue With Facebook")
-                            .font(.subheadline)
-                            .foregroundStyle(.white)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(Color(red: 0.26, green: 0.40, blue: 0.70)) // Facebook blue
-                    .cornerRadius(8)
-                }
-                .disabled(viewModel.isLoading)
             }
             .padding()
         }

@@ -57,7 +57,9 @@ class ChatManager: ObservableObject {
                 participants: [currentUserId, otherUserId].sorted(),
                 lastMessage: nil,
                 lastMessageTimestamp: nil,
-                createdAt: Date()
+                lastMessageSenderId: nil,
+                createdAt: Date(),
+                unreadCount: nil
             )
             
             let chatRef = try await db.collection("Chats").addDocument(from: newChat)
@@ -123,10 +125,12 @@ class ChatManager: ObservableObject {
             
             try messageRef.setData(from: message)
             
-            // Update chat's last message
+            // Update chat's last message and increment unread count for receiver
             db.collection("Chats").document(chatId).updateData([
                 "lastMessage": text,
-                "lastMessageTimestamp": Date()
+                "lastMessageTimestamp": Date(),
+                "lastMessageSenderId": senderId,
+                "unreadCount.\(receiverId)": FieldValue.increment(Int64(1))
             ])
             
         } catch {
@@ -220,7 +224,9 @@ class ChatManager: ObservableObject {
             
             try await db.collection("Chats").document(chatId).updateData([
                 "lastMessage": "🎤 Voice message",
-                "lastMessageTimestamp": Date()
+                "lastMessageTimestamp": Date(),
+                "lastMessageSenderId": senderId,
+                "unreadCount.\(receiverId)": FieldValue.increment(Int64(1))
             ])
             
             // Delete local file

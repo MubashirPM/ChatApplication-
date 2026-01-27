@@ -12,8 +12,6 @@ import FirebaseCore
 import FirebaseAuth
 import FirebaseFirestore
 import GoogleSignIn
-// TODO: Add FacebookLogin SDK package dependency in Xcode
-// import FacebookLogin
 import Combine
 
 /// ViewModel managing authentication state and Google Sign-In
@@ -28,6 +26,10 @@ class AuthenticationViewModel: ObservableObject {
     @Published var currentUser: UserModel?
     @Published var needsOTPVerification = false // New: Track if OTP verification is needed
     @Published var isInitializing = true // Track if initial auth check is in progress
+    @Published var isAuthenticating = false // Track if authentication flow is in progress (prevents UI flicker)
+    
+    // Track pending Google user for OTP-first flow
+    private var pendingGoogleUser: GIDGoogleUser?
     
     // MARK: - Private Properties
     
@@ -147,6 +149,7 @@ class AuthenticationViewModel: ObservableObject {
         // Clear authentication state
         isAuthenticated = false
         needsOTPVerification = false
+        isAuthenticating = false
         currentUser = nil
         UserDefaults.standard.set(false, forKey: authStateKey)
         errorMessage = nil
@@ -298,13 +301,19 @@ class AuthenticationViewModel: ObservableObject {
     /// Sign in with Google using native iOS flow
     func signInWithGoogle() async {
         isLoading = true
+        isAuthenticating = true // Prevent UI flicker during transition
         errorMessage = nil
         
         // First, try to restore previous sign-in (if user was signed in before)
         do {
             let restoredUser = try await GIDSignIn.sharedInstance.restorePreviousSignIn()
-            // User was already signed in, use their credentials
-            await handleGoogleSignInResult(user: restoredUser)
+            // User was already signed in, store for OTP verification
+            pendingGoogleUser = restoredUser
+            
+            // Show OTP screen first
+            needsOTPVerification = true
+            isLoading = false
+            // Keep isAuthenticating = true until OTP is verified
             return
         } catch {
             // No previous sign-in, continue with new sign-in flow
@@ -316,6 +325,7 @@ class AuthenticationViewModel: ObservableObject {
               let rootViewController = await windowScene.windows.first?.rootViewController else {
             errorMessage = "Unable to find root view controller"
             isLoading = false
+            isAuthenticating = false
             return
         }
         
@@ -323,7 +333,15 @@ class AuthenticationViewModel: ObservableObject {
             // Attempt native iOS sign-in flow
             let result = try await GIDSignIn.sharedInstance.signIn(withPresenting: rootViewController)
             
-            await handleGoogleSignInResult(user: result.user)
+            // Store the Google user for later Firebase authentication (after OTP)
+            pendingGoogleUser = result.user
+            
+            // Show OTP screen first, before Firebase authentication
+            needsOTPVerification = true
+            isLoading = false
+            // Keep isAuthenticating = true until OTP is verified
+            
+            debugPrint("✅ Google sign-in successful, showing OTP screen")
             
         } catch {
             let nsError = error as NSError
@@ -343,6 +361,7 @@ class AuthenticationViewModel: ObservableObject {
             }
             
             isLoading = false
+            isAuthenticating = false // Reset on error
         }
     }
     
@@ -363,16 +382,19 @@ class AuthenticationViewModel: ObservableObject {
             let authResult = try await Auth.auth().signIn(with: credential)
             let firebaseUser = authResult.user
             
+            debugPrint("✅ Google authentication successful for user: \(firebaseUser.uid)")
+            
             // Save user to Firestore (this will check OTP status and set needsOTPVerification if needed)
             await saveUserToFirestore(user: firebaseUser)
             
             // Load current user info
             await loadCurrentUserFromFirestore(userId: firebaseUser.uid)
             
-            // saveUserToFirestore and loadCurrentUserFromFirestore will handle OTP verification status
-            // If user is new or hasn't verified OTP, needsOTPVerification will be true
-            // If user already verified OTP, isAuthenticated will be set to true
+            // saveUserToFirestore sets needsOTPVerification = true
+            // This will show the OTP view next
             isLoading = false
+            
+            debugPrint("➡️  Navigating to OTP verification view")
             
         } catch {
             errorMessage = "Firebase authentication failed: \(error.localizedDescription)"
@@ -466,158 +488,6 @@ class AuthenticationViewModel: ObservableObject {
         await validateAndCheckAuthenticationState()
     }
     
-    // MARK: - Facebook Sign-In
-    
-    /// Sign in with Facebook using Firebase Auth
-    /// Note: Requires FacebookLogin SDK to be added to the project
-    func signInWithFacebook() async {
-        isLoading = true
-        errorMessage = nil
-        
-        // TODO: Uncomment after adding FacebookLogin SDK package dependency
-        /*
-        guard let windowScene = await UIApplication.shared.connectedScenes.first as? UIWindowScene,
-              let rootViewController = await windowScene.windows.first?.rootViewController else {
-            errorMessage = "Unable to find root view controller"
-            isLoading = false
-            return
-        }
-        
-        do {
-            // Request Facebook login permissions
-            let loginManager = LoginManager()
-            let result = try await loginManager.logIn(permissions: ["email", "public_profile"], from: rootViewController)
-            
-            guard let token = result.token?.tokenString else {
-                errorMessage = "Failed to get Facebook access token"
-                isLoading = false
-                return
-            }
-            
-            // Create Firebase credential with Facebook token
-            let credential = FacebookAuthProvider.credential(withAccessToken: token)
-            
-            // Sign in with Firebase
-            let authResult = try await Auth.auth().signIn(with: credential)
-            let firebaseUser = authResult.user
-            
-            // Save user to Firestore
-            await saveUserToFirestore(user: firebaseUser)
-            
-            // Load current user info
-            await loadCurrentUserFromFirestore(userId: firebaseUser.uid)
-            
-            // Save authentication state
-            saveAuthenticationState(true)
-            isLoading = false
-            
-        } catch {
-            if let loginError = error as? LoginError {
-                switch loginError {
-                case .cancelled:
-                    errorMessage = "Sign in was cancelled"
-                default:
-                    errorMessage = "Facebook sign in failed: \(error.localizedDescription)"
-                }
-            } else {
-                errorMessage = "Sign in failed: \(error.localizedDescription)"
-            }
-            isLoading = false
-        }
-        */
-        
-        // Temporary: Alternative implementation using web-based Facebook login
-        // This doesn't require Facebook SDK but uses a web view
-        await signInWithFacebookWebFlow()
-    }
-    
-    /// Sign in with Facebook using web-based flow (alternative to SDK)
-    /// This uses Firebase's OAuthProvider for Facebook authentication
-    private func signInWithFacebookWebFlow() async {
-        // Note: For production, it's recommended to use FacebookLogin SDK
-        // This is a simplified implementation using Firebase's OAuthProvider
-        
-        guard let windowScene = await UIApplication.shared.connectedScenes.first as? UIWindowScene,
-              let rootViewController = await windowScene.windows.first?.rootViewController else {
-            errorMessage = "Unable to find root view controller"
-            isLoading = false
-            return
-        }
-        
-        // Get Facebook App ID from Info.plist
-        // You need to add FacebookAppID to Info.plist
-        guard let facebookAppID = Bundle.main.object(forInfoDictionaryKey: "FacebookAppID") as? String,
-              !facebookAppID.isEmpty else {
-            errorMessage = "Facebook App ID not configured. Please add FacebookAppID to Info.plist"
-            debugPrint("Please add FacebookAppID to Info.plist with your Facebook App ID")
-            isLoading = false
-            return
-        }
-        
-        // Use Firebase's OAuthProvider for Facebook
-        let provider = OAuthProvider(providerID: "facebook.com")
-        provider.scopes = ["email", "public_profile"]
-        provider.customParameters = [
-            "display": "popup"
-        ]
-        
-        do {
-            // Sign in with OAuth provider
-            // OAuthProvider uses getCredentialWith method with delegate
-            let credential = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<AuthCredential, Error>) in
-                // Create a delegate wrapper for the view controller
-                let authUIDelegate = AuthUIDelegateWrapper(viewController: rootViewController)
-                
-                // Use getCredentialWith with the delegate (first parameter is the delegate)
-                provider.getCredentialWith(authUIDelegate) { credential, error in
-                    if let error = error {
-                        continuation.resume(throwing: error)
-                    } else if let credential = credential {
-                        continuation.resume(returning: credential)
-                    } else {
-                        continuation.resume(throwing: NSError(domain: "AuthError", code: -1, userInfo: [NSLocalizedDescriptionKey: "Failed to get credential"]))
-                    }
-                }
-            }
-            
-            // Sign in with Firebase
-            let authResult = try await Auth.auth().signIn(with: credential)
-            let firebaseUser = authResult.user
-            
-            // Save user to Firestore (this will check OTP status and set needsOTPVerification if needed)
-            await saveUserToFirestore(user: firebaseUser)
-            
-            // Load current user info
-            await loadCurrentUserFromFirestore(userId: firebaseUser.uid)
-            
-            // saveUserToFirestore and loadCurrentUserFromFirestore will handle OTP verification status
-            // If user is new or hasn't verified OTP, needsOTPVerification will be true
-            // If user already verified OTP, isAuthenticated will be set to true
-            isLoading = false
-            
-        } catch {
-            let nsError = error as NSError
-            
-            // Check if it's a cancellation error (usually code 2001 or domain contains "cancel")
-            if nsError.domain.contains("cancel") || nsError.code == 2001 {
-                errorMessage = "Facebook sign in was cancelled"
-            } else if nsError.domain == "FIRAuthErrorDomain", 
-                      let errorCode = AuthErrorCode(rawValue: nsError.code) {
-                switch errorCode {
-                case .userNotFound,
-                     .userDisabled,
-                     .invalidCredential:
-                    errorMessage = "Facebook sign in failed: \(error.localizedDescription)"
-                default:
-                    errorMessage = "Facebook sign in failed: \(error.localizedDescription)"
-                }
-            } else {
-                errorMessage = "Facebook sign in failed: \(error.localizedDescription)"
-            }
-            isLoading = false
-        }
-    }
-    
     /// Sign out the current user
     func signOut() {
         // Get user ID before signing out (will be nil after signOut)
@@ -638,6 +508,7 @@ class AuthenticationViewModel: ObservableObject {
             // Clear local state
             currentUser = nil
             needsOTPVerification = false
+            isAuthenticating = false
             saveAuthenticationState(false)
             errorMessage = nil
             
@@ -656,12 +527,6 @@ class AuthenticationViewModel: ObservableObject {
     func verifyOTP(_ enteredOTP: String) async -> Bool {
         isLoading = true
         errorMessage = nil
-        
-        guard let userId = Auth.auth().currentUser?.uid else {
-            errorMessage = "User not authenticated"
-            isLoading = false
-            return false
-        }
         
         do {
             // Fetch OTP from Firestore Settings collection
@@ -682,45 +547,152 @@ class AuthenticationViewModel: ObservableObject {
             
             // Verify entered OTP
             if enteredOTP == correctOTP {
-                // OTP is correct - mark user as verified in Firestore
-                let userRef = db.collection("Users").document(userId)
-                try await userRef.updateData([
-                    "isOTPVerified": true
-                ])
+                debugPrint("✅ OTP verified successfully")
                 
-                // Update local user model
-                if var user = currentUser {
-                    // Create updated user with OTP verified flag
-                    currentUser = UserModel(
-                        id: user.id,
-                        name: user.name,
-                        email: user.email,
-                        photoURL: user.photoURL,
-                        createdAt: user.createdAt,
-                        isOTPVerified: true
-                    )
+                // Now complete Google authentication with Firebase
+                if let googleUser = pendingGoogleUser {
+                    debugPrint("➡️  Completing Google authentication with Firebase...")
+                    await completeGoogleAuthenticationAfterOTP(user: googleUser)
+                    
+                    // Clear pending user
+                    pendingGoogleUser = nil
+                    // isAuthenticating is reset in completeGoogleAuthenticationAfterOTP
+                } else {
+                    // No pending Google user - this might be email/password login
+                    // Just authenticate normally
+                    guard let userId = Auth.auth().currentUser?.uid else {
+                        errorMessage = "User not authenticated"
+                        isLoading = false
+                        isAuthenticating = false
+                        return false
+                    }
+                    
+                    // Mark user as verified in Firestore
+                    let userRef = db.collection("Users").document(userId)
+                    try await userRef.updateData([
+                        "isOTPVerified": true
+                    ])
+                    
+                    // Update local user model
+                    if var user = currentUser {
+                        // Create updated user with OTP verified flag
+                        currentUser = UserModel(
+                            id: user.id,
+                            name: user.name,
+                            email: user.email,
+                            photoURL: user.photoURL,
+                            createdAt: user.createdAt,
+                            isOTPVerified: true
+                        )
+                    }
+                    
+                    // IMPORTANT: Update state in correct order to prevent UI flicker
+                    // 1. Clear OTP requirement first
+                    needsOTPVerification = false
+                    
+                    // 2. Then set authenticated (this will trigger navigation to TabBarView)
+                    isAuthenticated = true
+                    saveAuthenticationState(true)
+                    
+                    // 3. Clear authenticating state
+                    isAuthenticating = false
+                    
+                    // 4. Finally clear loading
+                    isLoading = false
+                    
+                    debugPrint("✅ OTP verified - navigating to TabBarView")
                 }
                 
-                // Complete authentication
-                needsOTPVerification = false
-                isAuthenticated = true
-                saveAuthenticationState(true)
-                isLoading = false
-                debugPrint("OTP verified successfully and user marked as verified")
                 return true
             } else {
                 // OTP is incorrect
                 errorMessage = "Invalid OTP. Please try again."
                 isLoading = false
-                debugPrint("OTP verification failed: entered '\(enteredOTP)', expected '\(correctOTP)'")
+                // Don't reset isAuthenticating - user is still in authentication flow
+                debugPrint("❌ OTP verification failed: entered '\(enteredOTP)', expected '\(correctOTP)'")
                 return false
             }
             
         } catch {
             errorMessage = "Error verifying OTP: \(error.localizedDescription)"
             isLoading = false
+            isAuthenticating = false // Reset on error
             debugPrint("OTP verification error: \(error.localizedDescription)")
             return false
+        }
+    }
+    
+    /// Complete Google authentication with Firebase after OTP verification
+    private func completeGoogleAuthenticationAfterOTP(user: GIDGoogleUser) async {
+        guard let idToken = user.idToken?.tokenString else {
+            errorMessage = "Failed to get ID token"
+            isLoading = false
+            isAuthenticating = false
+            return
+        }
+        
+        do {
+            let credential = GoogleAuthProvider.credential(
+                withIDToken: idToken,
+                accessToken: user.accessToken.tokenString
+            )
+            
+            let authResult = try await Auth.auth().signIn(with: credential)
+            let firebaseUser = authResult.user
+            
+            debugPrint("✅ Firebase authentication successful for user: \(firebaseUser.uid)")
+            
+            // Create/update user in Firestore with OTP verified status
+            let userRef = db.collection("Users").document(firebaseUser.uid)
+            
+            let documentSnapshot = try await userRef.getDocument()
+            
+            if documentSnapshot.exists {
+                // User already exists - update with OTP verified
+                try await userRef.updateData([
+                    "email": firebaseUser.email ?? "",
+                    "name": firebaseUser.displayName ?? "",
+                    "photoURL": firebaseUser.photoURL?.absoluteString ?? "",
+                    "isOTPVerified": true // Mark as verified since OTP was just verified
+                ])
+            } else {
+                // Create new user document with OTP verified
+                let userModel = UserModel(
+                    id: firebaseUser.uid,
+                    name: firebaseUser.displayName ?? "",
+                    email: firebaseUser.email ?? "",
+                    photoURL: firebaseUser.photoURL?.absoluteString ?? "",
+                    createdAt: Date(),
+                    isOTPVerified: true // Mark as verified since OTP was just verified
+                )
+                
+                try userRef.setData(from: userModel)
+            }
+            
+            // Load current user info
+            await loadCurrentUserFromFirestore(userId: firebaseUser.uid)
+            
+            // Update state to complete authentication - ORDER MATTERS!
+            // 1. Clear OTP requirement
+            needsOTPVerification = false
+            
+            // 2. Set authenticated
+            isAuthenticated = true
+            saveAuthenticationState(true)
+            
+            // 3. Clear authenticating state
+            isAuthenticating = false
+            
+            // 4. Finally clear loading
+            isLoading = false
+            
+            debugPrint("✅ Authentication complete - navigating to TabBarView")
+            
+        } catch {
+            errorMessage = "Firebase authentication failed: \(error.localizedDescription)"
+            isLoading = false
+            isAuthenticating = false
+            debugPrint("Firebase authentication error: \(error.localizedDescription)")
         }
     }
     
@@ -742,22 +714,3 @@ class AuthenticationViewModel: ObservableObject {
     }
 }
 
-// MARK: - AuthUIDelegate Wrapper
-
-/// Wrapper to make UIViewController conform to AuthUIDelegate
-private class AuthUIDelegateWrapper: NSObject, AuthUIDelegate {
-    weak var viewController: UIViewController?
-    
-    init(viewController: UIViewController) {
-        self.viewController = viewController
-        super.init()
-    }
-    
-    func present(_ viewControllerToPresent: UIViewController, animated flag: Bool, completion: (() -> Void)?) {
-        viewController?.present(viewControllerToPresent, animated: flag, completion: completion)
-    }
-    
-    func dismiss(animated flag: Bool, completion: (() -> Void)?) {
-        viewController?.dismiss(animated: flag, completion: completion)
-    }
-}
